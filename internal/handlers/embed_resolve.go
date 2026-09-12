@@ -170,7 +170,7 @@ func (h *Handler) resolveEmbed(r *http.Request, slug string) (*EmbedResolveResul
 		delete(medias, "original")
 	}
 
-	if len(medias) == 0 || file.Status != "ready" {
+	if len(medias) == 0 || !isPlayableFileStatus(file.Status) {
 		var vp models.VideoProcess
 		vpErr := models.VideoProcessModel.Col().FindOne(
 			ctx,

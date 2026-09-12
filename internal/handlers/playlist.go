@@ -54,7 +54,7 @@ func (h *Handler) HandlePlaylist(w http.ResponseWriter, r *http.Request) {
 
 		// ─── Step 1: Find file by slug ───────────────────────────────────
 		err := models.FileModel.Col().FindOne(ctx, bson.M{
-			"slug": slug, "kind": "stream", "status": "ready",
+			"slug": slug, "kind": "stream", "status": bson.M{"$in": playableFileStatuses()},
 			"metadata.deletedAt": nil, "metadata.trashedAt": nil,
 		}).Decode(&file)
 		if err != nil {

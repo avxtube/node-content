@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -33,7 +34,11 @@ func (h *Handler) HandleSpriteVTT(w http.ResponseWriter, r *http.Request) {
 
 	// ─── Step 1: Find file by slug ───────────────────────────────────────
 	var file models.File
-	err := models.FileModel.Col().FindOne(ctx, bson.M{"slug": slug, "kind": "stream", "status": "ready"}).Decode(&file)
+	err := models.FileModel.Col().FindOne(ctx, bson.M{
+		"slug":   slug,
+		"kind":   "stream",
+		"status": bson.M{"$in": playableFileStatuses()},
+	}).Decode(&file)
 	if err != nil {
 		log.Printf("[Sprite] File not found: %s", slug)
 		HandleNotFound(w, r)
@@ -167,7 +172,11 @@ func (h *Handler) HandleSpriteImage(w http.ResponseWriter, r *http.Request) {
 
 func resolveSpriteImageDestination(ctx context.Context, slug, filename string) (string, error) {
 	var file models.File
-	err := models.FileModel.Col().FindOne(ctx, bson.M{"slug": slug, "kind": "stream", "status": "ready"}).Decode(&file)
+	err := models.FileModel.Col().FindOne(ctx, bson.M{
+		"slug":   slug,
+		"kind":   "stream",
+		"status": bson.M{"$in": playableFileStatuses()},
+	}).Decode(&file)
 	if err != nil {
 		return "", fmt.Errorf("file lookup: %w", err)
 	}
@@ -202,15 +211,26 @@ func resolveSpriteImageDestination(ctx context.Context, slug, filename string) (
 }
 
 func spriteSourceURL(storage *models.Storage, media *models.Media, fileSlug, filename string) (string, error) {
+	if originURL := storage.GetOriginBaseURL(); originURL != "" {
+		objectPath := media.ObjectPath()
+		if objectPath == "" {
+			return "", fmt.Errorf("sprite media key is empty")
+		}
+		directory := path.Dir(objectPath)
+		if directory == "." || directory == "/" {
+			return "", fmt.Errorf("sprite media key has no directory")
+		}
+		return url.JoinPath(originURL, directory, filename)
+	}
+
 	baseURL := storage.GetStorageBaseURL()
-	assetID := fileSlug
 	if baseURL == "" {
 		return "", fmt.Errorf("storage base URL is empty")
 	}
-	if assetID == "" {
+	if fileSlug == "" {
 		return "", fmt.Errorf("sprite asset ID is empty")
 	}
-	return url.JoinPath(baseURL, assetID, "sprite", filename)
+	return url.JoinPath(baseURL, fileSlug, "sprite", filename)
 }
 
 func isValidSpriteFilename(filename string) bool {

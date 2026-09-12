@@ -18,8 +18,6 @@ type Config struct {
 
 	// Redis is optional. Without it, cache entries are stored in .cached.
 	RedisURL string
-
-	LogPath string // Path to rotating log file (env: LOG_PATH)
 }
 
 // Load reads configuration from environment variables (and .env file).
@@ -32,7 +30,6 @@ func Load() {
 		MongoURI:     getEnv("DATABASE_URL", "mongodb://localhost:27017"),
 		DomainStatic: getEnv("DOMAIN_STATIC", ""),
 		RedisURL:     getEnv("REDIS_URL", getEnv("RADIS_URL", "")),
-		LogPath:      getEnv("LOG_PATH", "logs/node-content.log"),
 	}
 }
 

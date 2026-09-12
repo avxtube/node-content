@@ -17,7 +17,6 @@ UNINSTALL=false
 DATABASE_URL=""
 REDIS_URL=""
 DOMAIN_STATIC=""
-LOG_PATH=""
 PORT="8082"
 ENV_FILE=""
 GITHUB_USER="${GITHUB_USER:-}"
@@ -58,7 +57,7 @@ MAP
 # Parse args
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --database-url|--mongodb-uri|--redis-url|--domain-static|--log-path|--env-file|--github-user|--github-token|--port|--app-host)
+        --database-url|--mongodb-uri|--redis-url|--domain-static|--env-file|--github-user|--github-token|--port|--app-host)
             if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then print_error "$1 requires a value"; exit 1; fi ;;
     esac
     case $1 in
@@ -69,7 +68,6 @@ while [[ $# -gt 0 ]]; do
         --mongodb-uri)       DATABASE_URL="$2"; shift 2 ;; # alias เดิม
         --redis-url)         REDIS_URL="$2"; shift 2 ;;
         --domain-static)     DOMAIN_STATIC="$2"; shift 2 ;;
-        --log-path)          LOG_PATH="$2"; shift 2 ;;
         --env-file)          ENV_FILE="$2"; shift 2 ;;
         --github-user)
             if [[ $# -lt 2 || -z "$2" ]]; then print_error "--github-user requires a value"; exit 1; fi
@@ -101,7 +99,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --mongodb-uri URI    Alias ของ --database-url"
             echo "  --redis-url URL      Redis URL (optional)"
             echo "  --domain-static HOST Static domain fallback (optional)"
-            echo "  --log-path PATH      Rotating log path (optional)"
             echo "  --env-file FILE      Existing environment file containing DATABASE_URL"
             echo "  --github-user USER   GitHub username used to fetch a private installer/release"
             echo "  --github-token TOKEN Personal access token used only during installation"
@@ -148,7 +145,7 @@ if [[ "$DATABASE_URL" == *[$'\r\n']* || "$DATABASE_URL" == *'"'* || "$DATABASE_U
     print_error "Percent-encode special characters in the database URI"
     exit 1
 fi
-for env_value in "$REDIS_URL" "$DOMAIN_STATIC" "$LOG_PATH"; do
+for env_value in "$REDIS_URL" "$DOMAIN_STATIC"; do
     if [[ "$env_value" == *[$'\r\n']* ]]; then print_error "Environment values cannot contain newlines"; exit 1; fi
 done
 if [[ -n "$DATABASE_URL" && "$DATABASE_URL" != mongodb://* && "$DATABASE_URL" != mongodb+srv://* ]]; then
@@ -291,7 +288,7 @@ print_status "Creating .env file..."
 ENV_DEST="$APP_DIR/.env"
 if [ -n "$ENV_FILE" ]; then
     TEMP_ENV=$(mktemp)
-    grep -E '^(DATABASE_URL|REDIS_URL|DOMAIN_STATIC|LOG_PATH)=' "$ENV_FILE" > "$TEMP_ENV" || true
+    grep -E '^(DATABASE_URL|REDIS_URL|DOMAIN_STATIC)=' "$ENV_FILE" > "$TEMP_ENV" || true
     install -m 600 "$TEMP_ENV" "$ENV_DEST"
     rm -f "$TEMP_ENV"
 elif [ -n "$DATABASE_URL" ]; then
@@ -303,7 +300,7 @@ elif [ ! -s "$ENV_DEST" ]; then
 else
     print_warning "No database option supplied; preserving existing $ENV_DEST"
 	TEMP_ENV=$(mktemp)
-	grep -E '^(DATABASE_URL|REDIS_URL|DOMAIN_STATIC|LOG_PATH)=' "$ENV_DEST" > "$TEMP_ENV" || true
+	grep -E '^(DATABASE_URL|REDIS_URL|DOMAIN_STATIC)=' "$ENV_DEST" > "$TEMP_ENV" || true
 	install -m 600 "$TEMP_ENV" "$ENV_DEST"
 	rm -f "$TEMP_ENV"
 fi
@@ -318,7 +315,6 @@ set_env_value() {
 set_env_value PORT "$PORT"
 if [ -n "$REDIS_URL" ]; then set_env_value REDIS_URL "$REDIS_URL"; fi
 if [ -n "$DOMAIN_STATIC" ]; then set_env_value DOMAIN_STATIC "$DOMAIN_STATIC"; fi
-if [ -n "$LOG_PATH" ]; then set_env_value LOG_PATH "$LOG_PATH"; fi
 chmod 600 "$ENV_DEST"
 if ! grep -qE '^DATABASE_URL=.+$' "$ENV_DEST"; then
     print_error "Environment must contain DATABASE_URL"
@@ -367,13 +363,18 @@ mv -f "$APP_DIR/$APP_NAME.new" "$APP_DIR/$APP_NAME"
 systemctl daemon-reload
 systemctl enable ${SERVICE_NAME}
 systemctl restart ${SERVICE_NAME}
+print_status "Waiting for node-content readiness on 127.0.0.1:$PORT..."
 READY=false
 for ((attempt=0;attempt<30;attempt++)); do
-    if curl --noproxy '*' -fsS --max-time 2 "http://127.0.0.1:$PORT/ready" >/dev/null; then READY=true; break; fi
+    if curl --noproxy '*' -fsS --max-time 2 "http://127.0.0.1:$PORT/ready" >/dev/null 2>&1; then
+        READY=true
+        break
+    fi
     sleep 1
 done
 if [ "$READY" = false ]; then
     print_error "Readiness failed; inspect journalctl -u $SERVICE_NAME"
+    journalctl -u "$SERVICE_NAME" --no-pager -n 30 >&2 || true
     if [ -f "$APP_DIR/$APP_NAME.previous" ]; then
         cp -p "$APP_DIR/$APP_NAME.previous" "$APP_DIR/$APP_NAME.rollback"
         mv -f "$APP_DIR/$APP_NAME.rollback" "$APP_DIR/$APP_NAME"
@@ -383,6 +384,7 @@ if [ "$READY" = false ]; then
     fi
     exit 1
 fi
+print_status "node-content is ready"
 
 fi # INSTALL_APP
 

@@ -12,7 +12,6 @@ import (
 
 	"node-content/internal/cache"
 	"node-content/internal/config"
-	"node-content/internal/core/logger"
 	"node-content/internal/db/database"
 	"node-content/internal/handlers"
 	"node-content/internal/services"
@@ -23,16 +22,9 @@ var version = "dev"
 
 func main() {
 	config.Load()
+	log.SetOutput(os.Stdout)
+	log.SetFlags(log.LstdFlags)
 	log.Printf("🚀 Starting Content Node %s", version)
-
-	// ── Rotating file logger ──────────────────────────────────
-	logCloser, err := logger.Init(config.AppConfig.LogPath)
-	if err != nil {
-		log.Printf("⚠️ File logging disabled: %v", err)
-	} else {
-		defer logCloser.Close()
-		log.Printf("📝 Logging to: %s", config.AppConfig.LogPath)
-	}
 
 	// ── MongoDB ───────────────────────────────────────────────
 	if err := database.Connect(); err != nil {

@@ -57,7 +57,9 @@ func (h *Handler) HandleSubtitle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var file models.File
-	if err := models.FileModel.Col().FindOne(ctx, bson.M{"_id": media.FileID, "status": "ready"}).Decode(&file); err != nil || file.IsTrashed() || file.IsDeleted() {
+	if err := models.FileModel.Col().FindOne(ctx, bson.M{
+		"_id": media.FileID, "status": bson.M{"$in": playableFileStatuses()},
+	}).Decode(&file); err != nil || file.IsTrashed() || file.IsDeleted() {
 		subtitleError(w, r, http.StatusNotFound)
 		return
 	}

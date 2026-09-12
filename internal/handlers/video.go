@@ -90,7 +90,7 @@ func (h *Handler) handleMediaPlaylist(w http.ResponseWriter, r *http.Request, op
 		}
 		var file models.File
 		if err = models.FileModel.Col().FindOne(ctx, bson.M{
-			"_id": media.FileID, "kind": "stream", "status": "ready",
+			"_id": media.FileID, "kind": "stream", "status": bson.M{"$in": playableFileStatuses()},
 			"metadata.deletedAt": nil, "metadata.trashedAt": nil,
 		}).Decode(&file); err != nil {
 			HandleNotFound(w, r)

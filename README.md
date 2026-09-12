@@ -40,7 +40,6 @@ PORT=8082
 DOMAIN_STATIC=
 # Optional. Leave empty to use the local .cached directory.
 REDIS_URL=
-LOG_PATH=logs/node-content.log
 ```
 
 `DATABASE_URL` must include the database name. The service always keeps a short in-memory cache. When `REDIS_URL` is empty or Redis cannot be reached at startup, cache entries are persisted in `.cached` for 5 minutes. Under systemd this directory is `/var/lib/node-content/.cached`; during local development it is created under the current working directory. Redis remains optional.

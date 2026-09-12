@@ -116,7 +116,9 @@ func (h *Handler) HandlePoster(w http.ResponseWriter, r *http.Request) {
 
 func resolvePosterDestination(ctx context.Context, slug, timePart string, isDefaultPoster bool) (string, error) {
 	var file models.File
-	err := models.FileModel.Col().FindOne(ctx, bson.M{"slug": slug, "kind": "stream", "status": "ready"}).Decode(&file)
+	err := models.FileModel.Col().FindOne(ctx, bson.M{
+		"slug": slug, "kind": "stream", "status": bson.M{"$in": playableFileStatuses()},
+	}).Decode(&file)
 	if err != nil {
 		return "", fmt.Errorf("file not found: %w", err)
 	}
