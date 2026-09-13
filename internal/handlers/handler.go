@@ -20,6 +20,7 @@ func NewHandler(h Handler) *Handler {
 
 // notFoundImage200 holds the pre-resized 200x200 not-found placeholder image
 var notFoundImage200 []byte
+var notFoundImagePortrait []byte
 
 func init() {
 	params := &ImageParams{Width: 200, Height: 200, Fit: "cover", Quality: 80}
@@ -28,6 +29,12 @@ func init() {
 		notFoundImage200 = assets.NotFoundImage
 	} else {
 		notFoundImage200 = resized
+	}
+	notFoundImagePortrait, _, err = resizeImage(assets.NotFoundImage, "image/png", &ImageParams{
+		Width: 180, Height: 320, Fit: "cover", Quality: 80, Thumbnail: true,
+	})
+	if err != nil {
+		panic("cannot resize embedded portrait placeholder: " + err.Error())
 	}
 }
 
@@ -56,6 +63,17 @@ func isImagePath(path string) bool {
 // - image paths → PNG placeholder
 // - everything else → XML NoSuchKey
 func sendNotFound(w http.ResponseWriter, r *http.Request, status int) {
+	if strings.HasSuffix(strings.ToLower(r.URL.Path), "/thumb-s.webp") {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Content-Length", strconv.Itoa(len(notFoundImagePortrait)))
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("CDN-Cache-Control", "public, max-age=60")
+		w.WriteHeader(status)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(notFoundImagePortrait)
+		}
+		return
+	}
 	if isImagePath(r.URL.Path) {
 		imageNotFound(w, status)
 	} else {

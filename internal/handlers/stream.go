@@ -28,6 +28,8 @@ type publicFileRequest struct {
 	Nested    bool
 }
 
+func (r publicFileRequest) isThumbnail() bool { return r.Asset == "thumb" || r.Asset == "thumb-s" }
+
 type publicAssetLookup struct {
 	SourceURL string `json:"sourceUrl"`
 	Mime      string `json:"mime,omitempty"`
@@ -125,7 +127,7 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if requested.Nested && requested.Asset != "thumb" && !mediaMatchesExtension(media, requested.Extension) {
+		if requested.Nested && !requested.isThumbnail() && !mediaMatchesExtension(media, requested.Extension) {
 			sendNotFound(w, r, http.StatusNotFound)
 			return
 		}
@@ -169,7 +171,7 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[Stream] Proxying: slug=%s → %s", fileSlug, sourceURL)
 
 	upstreamMethod := r.Method
-	if requested.Asset == "thumb" {
+	if requested.isThumbnail() {
 		upstreamMethod = http.MethodGet
 	}
 	upstreamReq, err := http.NewRequestWithContext(ctx, upstreamMethod, sourceURL, nil)
@@ -179,7 +181,7 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" && !requested.isThumbnail() {
 		upstreamReq.Header.Set("Range", rangeHeader)
 	}
 
@@ -199,8 +201,11 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 
 	// ─── Step 5: Check for image resize params ───────────────────────────
 	imgParams := parseImageParams(r)
-	if requested.Asset == "thumb" {
+	if requested.isThumbnail() {
 		imgParams = &ImageParams{Width: 330, Height: 168, Fit: "cover", Quality: 80, WebP: true, Thumbnail: true}
+		if requested.Asset == "thumb-s" {
+			imgParams.Width, imgParams.Height = 180, 320
+		}
 	}
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
@@ -223,7 +228,9 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Length", strconv.Itoa(len(imgData)))
 			w.Header().Set("Cache-Control", "public, max-age=63072000, immutable")
 			w.WriteHeader(http.StatusOK)
-			w.Write(imgData)
+			if r.Method != http.MethodHead {
+				w.Write(imgData)
+			}
 			return
 		}
 
@@ -231,7 +238,9 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.Itoa(len(resized)))
 		w.Header().Set("Cache-Control", "public, max-age=63072000, immutable")
 		w.WriteHeader(http.StatusOK)
-		w.Write(resized)
+		if r.Method != http.MethodHead {
+			w.Write(resized)
+		}
 		return
 	}
 	if r.Method == http.MethodHead {
@@ -304,13 +313,13 @@ func parsePublicFileRequest(requestPath string) (publicFileRequest, bool) {
 	}
 	asset := parts[1][:dot]
 	extension := strings.ToLower(parts[1][dot+1:])
-	if asset != "poster" && asset != "thumb" && asset != "preview" && asset != "short" {
+	if asset != "poster" && asset != "thumb" && asset != "thumb-s" && asset != "preview" && asset != "short" {
 		return publicFileRequest{}, false
 	}
 	if asset == "short" && extension != "mp4" && extension != "webm" && extension != "mov" && extension != "m4v" {
 		return publicFileRequest{}, false
 	}
-	if asset == "thumb" && extension != "webp" {
+	if (asset == "thumb" || asset == "thumb-s") && extension != "webp" {
 		return publicFileRequest{}, false
 	}
 	return publicFileRequest{Slug: parts[0], Asset: asset, Extension: extension, Nested: true}, true

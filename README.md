@@ -23,6 +23,7 @@ Files must be `ready` and must not have `metadata.trashedAt` or `metadata.delete
 | `/{fileSlug}/sprite/sprite-{n}.jpg` | Proxy a sprite image |
 | `/{posterFileSlug}/poster.{ext}` | Proxy the original poster image |
 | `/{posterFileSlug}/thumb.webp` | Return a 330×168 WebP thumbnail of the poster |
+| `/{posterFileSlug}/thumb-s.webp` | Return a vertical 180×320 (9:16) WebP thumbnail of the same poster, center-cropped |
 | `/{previewFileSlug}/preview.{ext}` | Proxy the preview video with Range support |
 | `/{shortFileSlug}/short.{ext}` | File kind stream → video Media matching mp4/webm/mov/m4v; GET/HEAD and Range supported |
 | `/{fileSlug}.{ext}` | Legacy flat image route, with query-string resize support |
