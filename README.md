@@ -24,6 +24,7 @@ Files must be `ready` and must not have `metadata.trashedAt` or `metadata.delete
 | `/{posterFileSlug}/poster.{ext}` | Proxy the original poster image |
 | `/{posterFileSlug}/thumb.webp` | Return a 330×168 WebP thumbnail of the poster |
 | `/{previewFileSlug}/preview.{ext}` | Proxy the preview video with Range support |
+| `/{shortFileSlug}/short.{ext}` | File kind stream → video Media matching mp4/webm/mov/m4v; GET/HEAD and Range supported |
 | `/{fileSlug}.{ext}` | Legacy flat image route, with query-string resize support |
 | `/playlist/{fileSlug}.json` | JW Player feed |
 | `/vast/hobby.xml` | VAST from `settings.advert_hobby` |

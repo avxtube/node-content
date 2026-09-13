@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -66,14 +67,7 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Lookup-Cache", "MISS")
 
 		// ─── Step 1: Find file by slug ───────────────────────────────────
-		fileFilter := bson.M{"slug": fileSlug, "status": "ready"}
-		if requested.Nested {
-			if requested.Asset == "preview" {
-				fileFilter["kind"] = "preview"
-			} else {
-				fileFilter["kind"] = "poster"
-			}
-		}
+		fileFilter := publicFileFilter(requested)
 		err := models.FileModel.Col().FindOne(ctx, fileFilter).Decode(&file)
 		if err == nil {
 			if file.IsTrashed() || file.IsDeleted() {
@@ -85,13 +79,18 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 			mediaFilter := bson.M{
 				"fileId": file.ID,
 			}
-			if requested.Nested && requested.Asset == "preview" {
+			if requested.Nested && (requested.Asset == "preview" || requested.Asset == "short") {
 				mediaFilter["type"] = enums.MediaTypeVideo
 			} else if requested.Nested {
 				mediaFilter["type"] = enums.MediaTypeImage
 			} else if file.Type == enums.FileTypeVideo {
 				// Legacy flat video image requests resolve to the generated thumbnail.
 				mediaFilter["type"] = enums.MediaTypeThumbnail
+			}
+
+			if requested.Asset == "short" {
+				// A stream File may also contain HLS renditions; select the requested object.
+				mediaFilter["key"] = bson.M{"$regex": "(?i)\\." + regexp.QuoteMeta(requested.Extension) + "$"}
 			}
 
 			err = models.MediaModel.Col().FindOne(
@@ -236,7 +235,7 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodHead {
-		for _, header := range []string{"Content-Type", "Content-Length", "Accept-Ranges", "ETag", "Last-Modified"} {
+		for _, header := range []string{"Content-Type", "Content-Length", "Accept-Ranges", "Content-Range", "ETag", "Last-Modified"} {
 			if value := resp.Header.Get(header); value != "" {
 				w.Header().Set(header, value)
 			}
@@ -271,6 +270,21 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 	io.CopyBuffer(w, resp.Body, buf)
 }
 
+func publicFileFilter(requested publicFileRequest) bson.M {
+	filter := bson.M{"slug": requested.Slug, "status": "ready"}
+	if requested.Nested {
+		switch requested.Asset {
+		case "preview":
+			filter["kind"] = "preview"
+		case "short":
+			filter["kind"] = "stream"
+		default:
+			filter["kind"] = "poster"
+		}
+	}
+	return filter
+}
+
 func parsePublicFileRequest(requestPath string) (publicFileRequest, bool) {
 	cleaned := strings.Trim(strings.TrimSpace(requestPath), "/")
 	parts := strings.Split(cleaned, "/")
@@ -290,7 +304,10 @@ func parsePublicFileRequest(requestPath string) (publicFileRequest, bool) {
 	}
 	asset := parts[1][:dot]
 	extension := strings.ToLower(parts[1][dot+1:])
-	if asset != "poster" && asset != "thumb" && asset != "preview" {
+	if asset != "poster" && asset != "thumb" && asset != "preview" && asset != "short" {
+		return publicFileRequest{}, false
+	}
+	if asset == "short" && extension != "mp4" && extension != "webm" && extension != "mov" && extension != "m4v" {
 		return publicFileRequest{}, false
 	}
 	if asset == "thumb" && extension != "webp" {

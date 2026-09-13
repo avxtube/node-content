@@ -51,6 +51,7 @@ func TestParsePublicFileRequest(t *testing.T) {
 		{"/poster-slug/poster.jpg", "poster-slug", "poster", "jpg"},
 		{"/poster-slug/thumb.webp", "poster-slug", "thumb", "webp"},
 		{"/preview-slug/preview.mp4", "preview-slug", "preview", "mp4"},
+		{"/short-slug/short.mp4", "short-slug", "short", "mp4"},
 	}
 	for _, test := range tests {
 		got, ok := parsePublicFileRequest(test.path)
