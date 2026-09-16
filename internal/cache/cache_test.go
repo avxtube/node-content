@@ -44,7 +44,7 @@ func TestJSONPersistsToDiskWithoutRedis(t *testing.T) {
 	want := struct {
 		SourceURL string `json:"sourceUrl"`
 	}{SourceURL: "https://media.example/poster.webp"}
-	key := "public_asset_proxy_destination_v2:poster-1:thumb:webp:true"
+	key := "public_asset_proxy_destination_v3:poster-1:thumb:webp:true"
 	SetJSON(key, &want)
 
 	filePath := filepath.Join(cacheDir, "poster-1.json")
@@ -73,8 +73,8 @@ func TestJSONPersistsToDiskWithoutRedis(t *testing.T) {
 
 func TestLookupKeysUseReadableSlugFileNames(t *testing.T) {
 	tests := map[string]string{
-		"public_asset_proxy_destination_v2:PRKQt1-Ch_ZQS:thumb:webp:true":  "PRKQt1-Ch_ZQS.json",
-		"public_asset_proxy_destination_v2:iDtD10-szj_eY:preview:mp4:true": "iDtD10-szj_eY.json",
+		"public_asset_proxy_destination_v3:PRKQt1-Ch_ZQS:thumb:webp:true":  "PRKQt1-Ch_ZQS.json",
+		"public_asset_proxy_destination_v3:iDtD10-szj_eY:preview:mp4:true": "iDtD10-szj_eY.json",
 		"playlist_master_metadata_v1:d3X-U4D_RSPyH":                        "d3X-U4D_RSPyH.json",
 		"playlist_video_v6:XMyOmDZE6oS":                                    "XMyOmDZE6oS.json",
 		"playlist_audio_v4:MAZeuc0JhmH":                                    "MAZeuc0JhmH.json",

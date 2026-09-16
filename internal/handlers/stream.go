@@ -31,8 +31,29 @@ type publicFileRequest struct {
 func (r publicFileRequest) isThumbnail() bool { return r.Asset == "thumb" || r.Asset == "thumb-s" }
 
 type publicAssetLookup struct {
-	SourceURL string `json:"sourceUrl"`
-	Mime      string `json:"mime,omitempty"`
+	SourceURL   string `json:"sourceUrl"`
+	Mime        string `json:"mime,omitempty"`
+	FileKind    string `json:"fileKind,omitempty"`
+	ContentKind string `json:"contentKind,omitempty"`
+}
+
+func thumbnailContentOwner(requested publicFileRequest, file models.File) string {
+	if requested.Asset != "thumb" || file.Kind != "poster" || file.OwnerType == nil || *file.OwnerType != "content" || file.OwnerID == nil {
+		return ""
+	}
+	return strings.TrimSpace(*file.OwnerID)
+}
+
+func thumbnailParams(requested publicFileRequest, lookup publicAssetLookup) *ImageParams {
+	p := &ImageParams{Width: 330, Height: 168, Fit: "cover", Quality: 80, WebP: true, Thumbnail: true}
+	if requested.Asset == "thumb-s" {
+		p.Width, p.Height = 180, 320
+	} else if lookup.FileKind == "avatar" {
+		p.Width, p.Height = 200, 200
+	} else if lookup.FileKind == "poster" && lookup.ContentKind == "short" {
+		p.Width, p.Height = 180, 320
+	}
+	return p
 }
 
 // StreamFile handles the current /{fileSlug}/{asset}.{ext} routes and legacy
@@ -59,7 +80,7 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 	var file models.File
 	var sourceURL string
 	var mediaMime string
-	lookupKey := fmt.Sprintf("public_asset_proxy_destination_v2:%s:%s:%s:%t", requested.Slug, requested.Asset, requested.Extension, requested.Nested)
+	lookupKey := fmt.Sprintf("public_asset_proxy_destination_v3:%s:%s:%s:%t", requested.Slug, requested.Asset, requested.Extension, requested.Nested)
 	var lookup publicAssetLookup
 	if cache.GetJSON(lookupKey, &lookup) && lookup.SourceURL != "" {
 		sourceURL = lookup.SourceURL
@@ -160,7 +181,21 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mediaMime = media.Mime
-		cache.SetJSON(lookupKey, &publicAssetLookup{SourceURL: sourceURL, Mime: mediaMime})
+		lookup = publicAssetLookup{SourceURL: sourceURL, Mime: mediaMime, FileKind: file.Kind}
+		if ownerID := thumbnailContentOwner(requested, file); ownerID != "" {
+			var content struct {
+				Kind string `bson:"kind"`
+			}
+			// Only automatic poster thumbnails need the owner's kind. The _id
+			// index and projection keep this cache-miss lookup small.
+			err := models.FileModel.Col().Database().Collection("contents").FindOne(ctx,
+				bson.M{"_id": ownerID}, options.FindOne().SetProjection(bson.M{"kind": 1, "_id": 0}),
+			).Decode(&content)
+			if err == nil {
+				lookup.ContentKind = content.Kind
+			}
+		}
+		cache.SetJSON(lookupKey, &lookup)
 	}
 
 	// ─── Step 4: Build source URL & proxy stream ─────────────────────────
@@ -202,10 +237,7 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 	// ─── Step 5: Check for image resize params ───────────────────────────
 	imgParams := parseImageParams(r)
 	if requested.isThumbnail() {
-		imgParams = &ImageParams{Width: 330, Height: 168, Fit: "cover", Quality: 80, WebP: true, Thumbnail: true}
-		if requested.Asset == "thumb-s" {
-			imgParams.Width, imgParams.Height = 180, 320
-		}
+		imgParams = thumbnailParams(requested, lookup)
 	}
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
@@ -287,6 +319,10 @@ func publicFileFilter(requested publicFileRequest) bson.M {
 			filter["kind"] = "preview"
 		case "short":
 			filter["kind"] = "stream"
+		case "avatar", "cover":
+			filter["kind"] = requested.Asset
+		case "thumb", "thumb-s":
+			filter["kind"] = bson.M{"$in": []string{"poster", "avatar", "cover"}}
 		default:
 			filter["kind"] = "poster"
 		}
@@ -313,7 +349,7 @@ func parsePublicFileRequest(requestPath string) (publicFileRequest, bool) {
 	}
 	asset := parts[1][:dot]
 	extension := strings.ToLower(parts[1][dot+1:])
-	if asset != "poster" && asset != "thumb" && asset != "thumb-s" && asset != "preview" && asset != "short" {
+	if asset != "poster" && asset != "avatar" && asset != "cover" && asset != "thumb" && asset != "thumb-s" && asset != "preview" && asset != "short" {
 		return publicFileRequest{}, false
 	}
 	if asset == "short" && extension != "mp4" && extension != "webm" && extension != "mov" && extension != "m4v" {

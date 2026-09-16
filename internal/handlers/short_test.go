@@ -43,7 +43,7 @@ func TestShortProxyRangeAndHead(t *testing.T) {
 	}))
 	defer upstream.Close()
 	slug := "short-range-test"
-	key := fmt.Sprintf("public_asset_proxy_destination_v2:%s:short:mp4:true", slug)
+	key := fmt.Sprintf("public_asset_proxy_destination_v3:%s:short:mp4:true", slug)
 	cache.SetJSON(key, publicAssetLookup{SourceURL: upstream.URL + "/2026-09-13/short.mp4", Mime: "video/mp4"})
 	h := NewHandler(Handler{})
 	for _, method := range []string{"GET", "HEAD"} {

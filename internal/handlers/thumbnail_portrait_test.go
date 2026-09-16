@@ -3,12 +3,15 @@ package handlers
 import (
 	"bytes"
 	"fmt"
+	"go.mongodb.org/mongo-driver/bson"
 	"image"
 	"image/color"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"node-content/internal/cache"
+	"node-content/internal/db/models"
+	"reflect"
 	"testing"
 )
 
@@ -36,13 +39,37 @@ func TestPortraitThumbnailRoute(t *testing.T) {
 		_, _ = w.Write(data.Bytes())
 	}))
 	defer upstream.Close()
-	for _, asset := range []string{"thumb", "thumb-s"} {
-		t.Run(asset, func(t *testing.T) {
-			slug := "portrait-test-" + asset
-			key := fmt.Sprintf("public_asset_proxy_destination_v2:%s:%s:webp:true", slug, asset)
-			cache.SetJSON(key, publicAssetLookup{SourceURL: upstream.URL + "/poster.png", Mime: "image/png"})
+	// Original image routes must remain byte-for-byte proxies, even for short owners.
+	for _, asset := range []string{"poster", "avatar", "cover"} {
+		slug := "original-" + asset
+		cache.SetJSON(fmt.Sprintf("public_asset_proxy_destination_v3:%s:%s:png:true", slug, asset),
+			publicAssetLookup{SourceURL: upstream.URL, Mime: "image/png", FileKind: asset, ContentKind: "short"})
+		w := httptest.NewRecorder()
+		NewHandler(Handler{}).Home(w, httptest.NewRequest("GET", "/"+slug+"/"+asset+".png", nil))
+		if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), data.Bytes()) {
+			t.Fatalf("%s must preserve original bytes", asset)
+		}
+	}
+	for _, tc := range []struct {
+		name, asset, fileKind, contentKind string
+		width, height                      int
+	}{
+		{"default", "thumb", "poster", "", 330, 168},
+		{"video", "thumb", "poster", "video", 330, 168},
+		{"post", "thumb", "poster", "post", 330, 168},
+		{"short", "thumb", "poster", "short", 180, 320},
+		{"avatar", "thumb", "avatar", "short", 200, 200},
+		{"cover", "thumb", "cover", "short", 330, 168},
+		{"portrait", "thumb-s", "poster", "video", 180, 320},
+		{"portrait-avatar", "thumb-s", "avatar", "", 180, 320},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			asset := tc.asset
+			slug := "portrait-test-" + tc.name
+			key := fmt.Sprintf("public_asset_proxy_destination_v3:%s:%s:webp:true", slug, asset)
+			cache.SetJSON(key, publicAssetLookup{SourceURL: upstream.URL + "/poster.png", Mime: "image/png", FileKind: tc.fileKind, ContentKind: tc.contentKind})
 			parsed, ok := parsePublicFileRequest("/" + slug + "/" + asset + ".webp")
-			if !ok || publicFileFilter(parsed)["kind"] != "poster" {
+			if !ok || !reflect.DeepEqual(publicFileFilter(parsed)["kind"], bson.M{"$in": []string{"poster", "avatar", "cover"}}) {
 				t.Fatal("wrong poster selection")
 			}
 			length := ""
@@ -65,10 +92,7 @@ func TestPortraitThumbnailRoute(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				width, height := 330, 168
-				if asset == "thumb-s" {
-					width, height = 180, 320
-				}
+				width, height := tc.width, tc.height
 				if img.Bounds().Dx() != width || img.Bounds().Dy() != height {
 					t.Fatal("wrong dimensions", img.Bounds())
 				}
@@ -83,6 +107,40 @@ func TestPortraitThumbnailRoute(t *testing.T) {
 	}
 	if _, ok := parsePublicFileRequest("/p/thumb-s.jpg"); ok {
 		t.Fatal("non-WebP portrait accepted")
+	}
+}
+
+func TestThumbnailContentOwner(t *testing.T) {
+	ownerType, ownerID := "content", "content-1"
+	file := models.File{Kind: "poster", OwnerType: &ownerType, OwnerID: &ownerID}
+	for _, asset := range []string{"poster", "avatar", "cover", "thumb-s", "preview", "short", "thumb"} {
+		want := ""
+		if asset == "thumb" {
+			want = ownerID
+		}
+		if got := thumbnailContentOwner(publicFileRequest{Asset: asset}, file); got != want {
+			t.Fatalf("%s: got %q want %q", asset, got, want)
+		}
+	}
+	for _, kind := range []string{"avatar", "cover"} {
+		file.Kind = kind
+		if thumbnailContentOwner(publicFileRequest{Asset: "thumb"}, file) != "" {
+			t.Fatalf("%s should not look up contents", kind)
+		}
+		parsed, ok := parsePublicFileRequest("/profile/" + kind + ".webp")
+		if !ok || publicFileFilter(parsed)["kind"] != kind {
+			t.Fatalf("invalid %s route", kind)
+		}
+	}
+	file.Kind = "poster"
+	ownerType = "user"
+	if thumbnailContentOwner(publicFileRequest{Asset: "thumb"}, file) != "" {
+		t.Fatal("user must not query contents")
+	}
+	file.OwnerType = nil
+	file.OwnerID = nil
+	if thumbnailContentOwner(publicFileRequest{Asset: "thumb"}, file) != "" {
+		t.Fatal("missing owner must use default")
 	}
 }
 

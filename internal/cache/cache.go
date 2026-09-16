@@ -141,7 +141,7 @@ var safeDiskName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,300}$`)
 
 func diskFileName(key string) (string, bool) {
 	for _, prefix := range []string{
-		"public_asset_proxy_destination_v2:",
+		"public_asset_proxy_destination_v3:",
 		"playlist_video_v6:",
 		"playlist_audio_v4:",
 		"playlist_master_metadata_v1:",

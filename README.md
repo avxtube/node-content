@@ -22,8 +22,10 @@ Files must be `ready` and must not have `metadata.trashedAt` or `metadata.delete
 | `/{fileSlug}/sprite/sprite.vtt` | Proxy the sprite VTT |
 | `/{fileSlug}/sprite/sprite-{n}.jpg` | Proxy a sprite image |
 | `/{posterFileSlug}/poster.{ext}` | Proxy the original poster image |
-| `/{posterFileSlug}/thumb.webp` | Return a 330×168 WebP thumbnail of the poster |
-| `/{posterFileSlug}/thumb-s.webp` | Return a vertical 180×320 (9:16) WebP thumbnail of the same poster, center-cropped |
+| `/{imageFileSlug}/thumb.webp` | Center-cropped WebP: avatar 200×200; poster owned by short content 180×320; other posters and covers 330×168 |
+| `/{avatarFileSlug}/avatar.{ext}` | Proxy the original profile image |
+| `/{coverFileSlug}/cover.{ext}` | Proxy the original cover image |
+| `/{imageFileSlug}/thumb-s.webp` | Always return a vertical 180×320 (9:16) WebP thumbnail, center-cropped |
 | `/{previewFileSlug}/preview.{ext}` | Proxy the preview video with Range support |
 | `/{shortFileSlug}/short.{ext}` | File kind stream → video Media matching mp4/webm/mov/m4v; GET/HEAD and Range supported |
 | `/{fileSlug}.{ext}` | Legacy flat image route, with query-string resize support |
@@ -32,7 +34,9 @@ Files must be `ready` and must not have `metadata.trashedAt` or `metadata.delete
 | `/advert/hobby.json` | Advert feed from `settings.advert_hobby` |
 | `/health` | Health status |
 
-Only the current platform collections are queried: `files`, `medias`, `storages`, `settings`, and `video_process`. The service snapshots settings and safe storage delivery fields to `conf/setting.json` at startup and every minute. The platform's `domain_setting` value is exposed in that file as `custom_domain`; the old `custom_domains` and `workspaces` collections are not used.
+Automatic `thumb.webp` requests check File kind first. Only content-owned posters read `contents.kind`, using the owner's `_id` and projecting only `kind` on a lookup cache miss. The result is cached with the source URL. Missing owners or unavailable content kinds use 330×168. Original image routes, avatars, covers, and fixed `thumb-s.webp` requests do not query `contents`.
+
+Only the current platform collections are queried: `files`, `medias`, `contents`, `storages`, `settings`, and `video_process`. The service snapshots settings and safe storage delivery fields to `conf/setting.json` at startup and every minute. The platform's `domain_setting` value is exposed in that file as `custom_domain`; the old `custom_domains` and `workspaces` collections are not used.
 
 ## Configuration
 
