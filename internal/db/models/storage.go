@@ -105,6 +105,8 @@ func (s *Storage) GetPlaybackBaseURL() string { return s.GetPublicBaseURL() }
 func (s *Storage) GetStorageBaseURL() string  { return s.GetPublicBaseURL() }
 func (s *Storage) GetVODBaseURL() string      { return s.GetPublicBaseURL() }
 
+func (s *Storage) IsProxy() bool { return strings.EqualFold(strings.TrimSpace(s.Provider), "proxy") }
+
 func normalizeBaseURL(raw, defaultScheme string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -123,5 +125,16 @@ func normalizeBaseURL(raw, defaultScheme string) string {
 }
 
 func (s *Storage) IsOnline() bool {
-	return s.Enabled && s.DeletedAt == nil && s.Status == "online"
+	if !s.Enabled || s.DeletedAt != nil {
+		return false
+	}
+	if s.IsProxy() {
+		if s.GetPublicBaseURL() == "" {
+			return false
+		}
+		// A newly-created proxy can be ready for delivery before its first
+		// health check changes the persisted status from unknown to online.
+		return s.Status == "" || s.Status == "unknown" || s.Status == "online"
+	}
+	return s.Status == "online"
 }

@@ -73,6 +73,8 @@ func TestJSONPersistsToDiskWithoutRedis(t *testing.T) {
 
 func TestLookupKeysUseReadableSlugFileNames(t *testing.T) {
 	tests := map[string]string{
+		"poster_delivery_v2:heyzo-3940":                                    "heyzo-3940_poster.json",
+		"sprite_delivery_v2:heyzo-3940":                                    "heyzo-3940_sprite.json",
 		"public_asset_proxy_destination_v3:PRKQt1-Ch_ZQS:thumb:webp:true":  "PRKQt1-Ch_ZQS.json",
 		"public_asset_proxy_destination_v3:iDtD10-szj_eY:preview:mp4:true": "iDtD10-szj_eY.json",
 		"playlist_master_metadata_v1:d3X-U4D_RSPyH":                        "d3X-U4D_RSPyH.json",
@@ -87,6 +89,47 @@ func TestLookupKeysUseReadableSlugFileNames(t *testing.T) {
 		if got := name + ".json"; got != want {
 			t.Fatalf("diskFileName(%q) = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestInitRemovesLegacyPerAssetCacheFiles(t *testing.T) {
+	previousDir := cacheDir
+	previousDiskEnabled := diskEnabled
+	previousClient := client
+	cacheDir = filepath.Join(t.TempDir(), ".cached")
+	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []string{
+		"heyzo-3940_sprite-0.json",
+		"heyzo-3940_sprite-34.json",
+		"heyzo-3940_poster_poster.json",
+		"heyzo-3940_poster_120.json",
+	}
+	for _, name := range legacy {
+		if err := os.WriteFile(filepath.Join(cacheDir, name), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := filepath.Join(cacheDir, "heyzo-3940_sprite.json")
+	if err := os.WriteFile(keep, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	Init("")
+	t.Cleanup(func() {
+		cacheDir = previousDir
+		diskEnabled = previousDiskEnabled
+		client = previousClient
+	})
+
+	for _, name := range legacy {
+		if _, err := os.Stat(filepath.Join(cacheDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("legacy cache %s was not removed", name)
+		}
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("combined cache was removed: %v", err)
 	}
 }
 

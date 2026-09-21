@@ -42,7 +42,7 @@ func (h *Handler) HandlePlaylist(w http.ResponseWriter, r *http.Request) {
 	var file models.File
 	var medias []models.Media
 	var audioMedias []models.Media
-	cacheKey := "playlist_master_metadata_v1:" + slug
+	cacheKey := "playlist_master_metadata_v3:" + slug
 	var metadata masterPlaylistMetadata
 	if cache.GetJSON(cacheKey, &metadata) {
 		file = metadata.File
@@ -69,8 +69,10 @@ func (h *Handler) HandlePlaylist(w http.ResponseWriter, r *http.Request) {
 
 		// ─── Step 2: Find all video media for this file ──────────────────
 		mediaFilter := bson.M{
-			"fileId": file.ID,
-			"type":   enums.MediaTypeVideo,
+			"fileId":    file.ID,
+			"type":      enums.MediaTypeVideo,
+			"enabled":   bson.M{"$ne": false},
+			"deletedAt": nil,
 			"quality": bson.M{"$in": []string{
 				enums.ResolutionOriginal,
 				enums.Resolution1080,
@@ -196,7 +198,9 @@ func (h *Handler) HandlePlaylist(w http.ResponseWriter, r *http.Request) {
 			}
 
 			playbackBaseURL := storage.GetPlaybackBaseURL()
-			if playbackBaseURL != "" {
+			if storage.IsProxy() {
+				streamInf = streamInfoFromMedia(media)
+			} else if playbackBaseURL != "" {
 				masterURL := fmt.Sprintf("%s/%s/master.m3u8", playbackBaseURL, media.Slug)
 				content, err := utils.FetchURLContent(ctx, masterURL)
 				if err == nil {
@@ -235,6 +239,72 @@ func (h *Handler) HandlePlaylist(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("CDN-Cache-Control", "public, max-age=300")
 
 	w.Write([]byte(playlist.String()))
+}
+
+func streamInfoFromMedia(media models.Media) string {
+	resolution := ""
+	if media.Quality != nil {
+		resolution = *media.Quality
+	}
+	bandwidth := metadataNumber(media.Metadata, "bandwidth")
+	if hls := metadataObject(media.Metadata["hls"]); len(hls) > 0 {
+		if value := metadataNumber(hls, "bandwidth"); value > 0 {
+			bandwidth = value
+		}
+	}
+	if rawAttributes := metadataObject(media.Metadata["rawAttributes"]); bandwidth <= 0 {
+		bandwidth = metadataNumber(rawAttributes, "BANDWIDTH")
+	}
+	if bandwidth <= 0 {
+		fmt.Sscanf(getEstimatedBandwidth(resolution), "%f", &bandwidth)
+	}
+	width, height := getResolutionDimensions(resolution)
+	if media.Width != nil && *media.Width > 0 {
+		width = *media.Width
+	}
+	if media.Height != nil && *media.Height > 0 {
+		height = *media.Height
+	}
+	line := fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%.0f", bandwidth)
+	if width > 0 && height > 0 {
+		line += ",RESOLUTION=" + formatResolution(width, height)
+	}
+	return line
+}
+
+func metadataNumber(values map[string]interface{}, key string) float64 {
+	if values == nil {
+		return 0
+	}
+	switch value := values[key].(type) {
+	case int:
+		return float64(value)
+	case int32:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case float32:
+		return float64(value)
+	case float64:
+		return value
+	case string:
+		var number float64
+		fmt.Sscanf(strings.TrimSpace(value), "%f", &number)
+		return number
+	default:
+		return 0
+	}
+}
+
+func metadataObject(value interface{}) map[string]interface{} {
+	switch object := value.(type) {
+	case map[string]interface{}:
+		return object
+	case bson.M:
+		return map[string]interface{}(object)
+	default:
+		return nil
+	}
 }
 
 func writeAudioRenditions(playlist *strings.Builder, host string, medias []models.Media) {

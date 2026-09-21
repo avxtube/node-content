@@ -126,6 +126,7 @@ func enableDiskCache() {
 		log.Printf("⚠️ Local cache unavailable: %v", err)
 		return
 	}
+	removeLegacyAssetCacheEntries()
 	removeExpiredDiskEntries()
 }
 
@@ -140,33 +141,46 @@ func diskPath(key string) string {
 var safeDiskName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,300}$`)
 
 func diskFileName(key string) (string, bool) {
+	for prefix, suffix := range map[string]string{
+		"poster_delivery_v2:": "_poster",
+		"sprite_delivery_v2:": "_sprite",
+	} {
+		if strings.HasPrefix(key, prefix) {
+			name := strings.TrimPrefix(key, prefix) + suffix
+			return name, safeDiskName.MatchString(name)
+		}
+	}
 	for _, prefix := range []string{
 		"public_asset_proxy_destination_v3:",
 		"playlist_video_v6:",
+		"playlist_video_v7:",
+		"playlist_video_v8:",
 		"playlist_audio_v4:",
+		"playlist_audio_v5:",
 		"playlist_master_metadata_v1:",
+		"playlist_master_metadata_v2:",
+		"playlist_master_metadata_v3:",
 	} {
 		if strings.HasPrefix(key, prefix) {
 			name := strings.SplitN(strings.TrimPrefix(key, prefix), ":", 2)[0]
 			return name, safeDiskName.MatchString(name)
 		}
 	}
-	if strings.HasPrefix(key, "poster_proxy_destination_v1:") {
-		parts := strings.Split(strings.TrimPrefix(key, "poster_proxy_destination_v1:"), ":")
-		if len(parts) == 2 {
-			name := parts[0] + "_poster_" + parts[1]
-			return name, safeDiskName.MatchString(name)
-		}
-	}
-	if strings.HasPrefix(key, "sprite_image_proxy_destination_v1:") {
-		parts := strings.Split(strings.TrimPrefix(key, "sprite_image_proxy_destination_v1:"), ":")
-		if len(parts) == 2 {
-			filename := strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
-			name := parts[0] + "_" + filename
-			return name, safeDiskName.MatchString(name)
-		}
-	}
 	return "", false
+}
+
+var legacyAssetCacheName = regexp.MustCompile(`^(?:.+_sprite-[0-9]+|.+_poster_(?:poster|[0-9]+))\.json$`)
+
+func removeLegacyAssetCacheEntries() {
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && legacyAssetCacheName.MatchString(entry.Name()) {
+			_ = os.Remove(filepath.Join(cacheDir, entry.Name()))
+		}
+	}
 }
 
 func getDisk(key string) ([]byte, bool) {

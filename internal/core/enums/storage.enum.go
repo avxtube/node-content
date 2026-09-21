@@ -5,6 +5,7 @@ package enums
 const (
 	StorageTypeLocal = "local"
 	StorageTypeS3    = "s3"
+	StorageTypeProxy = "proxy"
 )
 
 // ─── Storage Statuses ────────────────────────────────────────────────

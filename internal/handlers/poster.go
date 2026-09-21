@@ -63,22 +63,26 @@ func (h *Handler) HandlePoster(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	cacheKey := "poster_proxy_destination_v1:" + slug + ":" + timePart
-	var destination proxyDestination
-	if cache.GetJSON(cacheKey, &destination) && destination.URL != "" {
+	cacheKey := "poster_delivery_v2:" + slug
+	var delivery posterDelivery
+	if cache.GetJSON(cacheKey, &delivery) && delivery.URLPrefix != "" {
 		w.Header().Set("X-Lookup-Cache", "HIT")
 	} else {
 		w.Header().Set("X-Lookup-Cache", "MISS")
-		resolved, err := resolvePosterDestination(ctx, slug, timePart, isDefaultPoster)
+		resolved, err := resolvePosterDelivery(ctx, slug)
 		if err != nil {
-			log.Printf("[Poster] Cannot resolve destination for %s: %v", slug, err)
+			log.Printf("[Poster] Cannot resolve delivery for %s: %v", slug, err)
 			sendNotFound(w, r, http.StatusNotFound)
 			return
 		}
-		destination.URL = resolved
-		cache.SetJSON(cacheKey, &destination)
+		delivery = resolved
+		cache.SetJSON(cacheKey, &delivery)
 	}
-	thumbURL := destination.URL
+	thumbURL, err := delivery.imageURL(timePart, isDefaultPoster)
+	if err != nil {
+		sendNotFound(w, r, http.StatusNotFound)
+		return
+	}
 	log.Printf("[Poster] Fetching poster: %s", thumbURL)
 
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, thumbURL, nil)
@@ -114,17 +118,44 @@ func (h *Handler) HandlePoster(w http.ResponseWriter, r *http.Request) {
 	io.CopyBuffer(w, resp.Body, buf)
 }
 
-func resolvePosterDestination(ctx context.Context, slug, timePart string, isDefaultPoster bool) (string, error) {
+type posterDelivery struct {
+	Delivery       string  `json:"delivery"`
+	URLPrefix      string  `json:"urlPrefix"`
+	URLSuffix      string  `json:"urlSuffix"`
+	DurationSecond float64 `json:"durationSeconds,omitempty"`
+}
+
+func (delivery posterDelivery) imageURL(timePart string, isDefault bool) (string, error) {
+	second := 0
+	if isDefault {
+		second = int(delivery.DurationSecond / 2)
+	} else {
+		parsed, err := strconv.Atoi(timePart)
+		if err != nil || parsed < 0 {
+			return "", fmt.Errorf("invalid poster second")
+		}
+		second = parsed
+	}
+	if delivery.DurationSecond > 0 && float64(second) >= delivery.DurationSecond {
+		second = int(math.Ceil(delivery.DurationSecond)) - 1
+		if second < 0 {
+			second = 0
+		}
+	}
+	return delivery.URLPrefix + strconv.Itoa(second) + "000" + delivery.URLSuffix, nil
+}
+
+func resolvePosterDelivery(ctx context.Context, slug string) (posterDelivery, error) {
 	var file models.File
 	err := models.FileModel.Col().FindOne(ctx, bson.M{
 		"slug": slug, "kind": "stream", "status": bson.M{"$in": playableFileStatuses()},
 	}).Decode(&file)
 	if err != nil {
-		return "", fmt.Errorf("file not found: %w", err)
+		return posterDelivery{}, fmt.Errorf("file not found: %w", err)
 	}
 
 	if file.IsTrashed() || file.IsDeleted() {
-		return "", fmt.Errorf("file is deleted")
+		return posterDelivery{}, fmt.Errorf("file is deleted")
 	}
 
 	// ─── Step 2: Find video media ────────────────────────────────────────
@@ -133,7 +164,7 @@ func resolvePosterDestination(ctx context.Context, slug, timePart string, isDefa
 		"type":   enums.MediaTypeVideo,
 	})
 	if err != nil {
-		return "", fmt.Errorf("video media lookup: %w", err)
+		return posterDelivery{}, fmt.Errorf("video media lookup: %w", err)
 	}
 	defer mediaCursor.Close(ctx)
 
@@ -145,30 +176,37 @@ func resolvePosterDestination(ctx context.Context, slug, timePart string, isDefa
 		}
 	}
 	if err := mediaCursor.Err(); err != nil {
-		return "", fmt.Errorf("video media cursor: %w", err)
+		return posterDelivery{}, fmt.Errorf("video media cursor: %w", err)
 	}
 
 	media, ok := selectPosterMedia(videoMedias)
 	if !ok {
-		return "", fmt.Errorf("video media not found for fileId=%s", file.ID)
+		return posterDelivery{}, fmt.Errorf("video media not found for fileId=%s", file.ID)
 	}
-	timePart = strconv.Itoa(resolvePosterSecond(timePart, isDefaultPoster, file, media))
 
 	// ─── Step 3: Find storage ────────────────────────────────────────────
 	storageID := strings.TrimSpace(media.StorageID)
 
 	storage, ok := getOnlineStorage(storageID)
 	if !ok {
-		return "", fmt.Errorf("storage not found: %s", storageID)
+		return posterDelivery{}, fmt.Errorf("storage not found: %s", storageID)
+	}
+	if storage.IsProxy() {
+		return posterDelivery{}, fmt.Errorf("proxy delivery does not generate poster thumbnails")
 	}
 
 	vodBaseURL := storage.GetVODBaseURL()
 	if vodBaseURL == "" {
-		return "", fmt.Errorf("storage has no VOD URL: %s", storage.ID)
+		return posterDelivery{}, fmt.Errorf("storage has no VOD URL: %s", storage.ID)
 	}
-
-	timeMs := timePart + "000" // seconds → milliseconds
-	return fmt.Sprintf("%s/%s/thumb-%s-w500.jpg", vodBaseURL, media.Slug, timeMs), nil
+	duration := 0.0
+	if file.Metadata != nil && file.Metadata.Duration != nil && *file.Metadata.Duration > 0 {
+		duration = *file.Metadata.Duration
+	}
+	return posterDelivery{
+		Delivery: storage.Provider, URLPrefix: fmt.Sprintf("%s/%s/thumb-", vodBaseURL, media.Slug),
+		URLSuffix: "-w500.jpg", DurationSecond: duration,
+	}, nil
 }
 
 // selectPosterMedia chooses the lowest numeric resolution available. Original

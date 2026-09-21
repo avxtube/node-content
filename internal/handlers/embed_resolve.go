@@ -245,7 +245,10 @@ func (h *Handler) resolveEmbed(r *http.Request, slug string) (*EmbedResolveResul
 	if err := models.MediaModel.Col().FindOne(ctx, bson.M{
 		"fileId": file.ID,
 		"type":   bson.M{"$in": []string{enums.MediaTypeThumbnail, enums.MediaTypeSubtitle}},
-		"key":    bson.M{"$regex": `(^|/)sprite\.vtt$`},
+		"$or": []bson.M{
+			{"key": bson.M{"$regex": `(^|/)sprite\.vtt$`}},
+			{"type": enums.MediaTypeThumbnail, "metadata.delivery": "proxy", "metadata.purpose": "thumbnail"},
+		},
 	}).Decode(&spriteMedia); err == nil {
 		if staticHost != "" {
 			spriteVttURL = reqProto + "://" + staticHost + "/" + slug + "/sprite/sprite.vtt"

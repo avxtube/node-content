@@ -47,3 +47,26 @@ func TestPublicURLRejectsInvalidValue(t *testing.T) {
 		t.Fatalf("GetPublicBaseURL() = %q, want empty", got)
 	}
 }
+
+func TestProxyStorageUsesPublicURL(t *testing.T) {
+	storage := &Storage{
+		Provider:  "proxy",
+		Enabled:   true,
+		Status:    "unknown",
+		PublicURL: "https://proxy.example.com/base/",
+		OriginURL: "https://origin.example.com/ignored",
+	}
+	if !storage.IsProxy() {
+		t.Fatal("proxy provider was not detected")
+	}
+	if got, want := storage.GetPlaybackBaseURL(), "https://proxy.example.com/base"; got != want {
+		t.Fatalf("GetPlaybackBaseURL() = %q, want %q", got, want)
+	}
+	if !storage.IsOnline() {
+		t.Fatal("enabled proxy with a public URL must be usable before its first health check")
+	}
+	storage.Status = "error"
+	if storage.IsOnline() {
+		t.Fatal("proxy with an explicit error status must not be usable")
+	}
+}

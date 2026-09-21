@@ -45,3 +45,20 @@ func TestResolvePosterSecondUsesFileDurationAndClamps(t *testing.T) {
 		t.Fatalf("expected clamped second 99, got %d", got)
 	}
 }
+
+func TestPosterDeliveryBuildsDynamicThumbnailURL(t *testing.T) {
+	delivery := posterDelivery{
+		Delivery:       "s3",
+		URLPrefix:      "https://storage.example.com/media-id/thumb-",
+		URLSuffix:      "-w500.jpg",
+		DurationSecond: 100,
+	}
+
+	got, err := delivery.imageURL("poster", true)
+	if err != nil {
+		t.Fatalf("imageURL() error = %v", err)
+	}
+	if want := "https://storage.example.com/media-id/thumb-50000-w500.jpg"; got != want {
+		t.Fatalf("imageURL() = %q, want %q", got, want)
+	}
+}

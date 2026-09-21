@@ -25,7 +25,7 @@ func (h *Handler) HandleVideo(w http.ResponseWriter, r *http.Request) {
 	h.handleMediaPlaylist(w, r, mediaPlaylistOptions{
 		publicSuffix:     "/video.m3u8",
 		mediaType:        enums.MediaTypeVideo,
-		cachePrefix:      "playlist_video_v6:",
+		cachePrefix:      "playlist_video_v8:",
 		logLabel:         "Video",
 		upstreamPlaylist: "video.m3u8",
 	})
@@ -36,7 +36,7 @@ func (h *Handler) HandleAudio(w http.ResponseWriter, r *http.Request) {
 	h.handleMediaPlaylist(w, r, mediaPlaylistOptions{
 		publicSuffix:     "/audio.m3u8",
 		mediaType:        enums.MediaTypeAudio,
-		cachePrefix:      "playlist_audio_v4:",
+		cachePrefix:      "playlist_audio_v5:",
 		logLabel:         "Audio",
 		upstreamPlaylist: "audio.m3u8",
 	})
@@ -66,9 +66,10 @@ func (h *Handler) handleMediaPlaylist(w http.ResponseWriter, r *http.Request, op
 	// เก็บเฉพาะ playback URL + public domains ไม่เก็บ playlist
 	// ทั้งก้อน — body ใหญ่และ CF cache ปลายทางอยู่แล้ว
 	type mediaLookup struct {
-		SourceURL     string   `json:"sourceUrl"`
-		ProxyURL      string   `json:"proxyUrl"`
-		PublicDomains []string `json:"publicDomains"`
+		SourceURL        string   `json:"sourceUrl"`
+		ProxyURL         string   `json:"proxyUrl"`
+		GeneratedContent string   `json:"generatedContent,omitempty"`
+		PublicDomains    []string `json:"publicDomains"`
 	}
 	cacheKey := options.cachePrefix + slug
 
@@ -110,9 +111,21 @@ func (h *Handler) handleMediaPlaylist(w http.ResponseWriter, r *http.Request, op
 		lk.PublicDomains = storage.GetPublicDomains()
 		if playbackBaseURL != "" {
 			lk.SourceURL, _ = url.JoinPath(playbackBaseURL, media.Key)
-			lk.ProxyURL = fmt.Sprintf("%s/%s/%s", playbackBaseURL, slug, options.upstreamPlaylist)
+			lk.ProxyURL, _ = url.JoinPath(playbackBaseURL, slug, options.upstreamPlaylist)
+			if storage.IsProxy() {
+				lk.GeneratedContent, err = renderProxyMediaPlaylist(media, playbackBaseURL)
+				if err != nil {
+					log.Printf("[%s] Cannot generate proxy playlist for media=%s: %v", options.logLabel, slug, err)
+					HandleCachedError(w, r, http.StatusUnprocessableEntity)
+					return
+				}
+			}
 		}
 		cache.SetJSON(cacheKey, &lk)
+	}
+	if lk.GeneratedContent != "" {
+		writeMediaPlaylist(w, lk.GeneratedContent)
+		return
 	}
 
 	if len(lk.PublicDomains) == 0 {
@@ -145,12 +158,16 @@ func (h *Handler) handleMediaPlaylist(w http.ResponseWriter, r *http.Request, op
 	// ─── Step 5: Rewrite segment URLs to use publicUrl domains ──────────
 	rewrittenPlaylist := utils.RewritePlaylist(playlistContent, domains, slug)
 
-	responseBody := []byte(rewrittenPlaylist)
+	writeMediaPlaylist(w, rewrittenPlaylist)
+}
+
+func writeMediaPlaylist(w http.ResponseWriter, content string) {
+	responseBody := []byte(content)
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(responseBody)))
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("CDN-Cache-Control", "public, max-age=2592000")
 
-	w.Write(responseBody)
+	_, _ = w.Write(responseBody)
 }
