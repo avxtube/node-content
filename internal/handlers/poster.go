@@ -21,6 +21,9 @@ import (
 // HandlePoster handles GET /thumb/{fileSlug}/{n}.jpg and /thumb/{fileSlug}/poster.jpg.
 // Proxies thumbnail from nginx-vod-module via storage
 func (h *Handler) HandlePoster(w http.ResponseWriter, r *http.Request) {
+	timing := newAssetTiming(w)
+	w = timing
+	defer timing.finish(r)
 	path := strings.TrimPrefix(r.URL.Path, "/thumb/")
 	if path == "" {
 		sendNotFound(w, r, http.StatusNotFound)
@@ -65,18 +68,25 @@ func (h *Handler) HandlePoster(w http.ResponseWriter, r *http.Request) {
 
 	cacheKey := "poster_delivery_v2:" + slug
 	var delivery posterDelivery
-	if cache.GetJSON(cacheKey, &delivery) && delivery.URLPrefix != "" {
+	done := timing.measure("lookup_cache")
+	hit := cache.GetJSON(cacheKey, &delivery) && delivery.URLPrefix != ""
+	done()
+	if hit {
 		w.Header().Set("X-Lookup-Cache", "HIT")
 	} else {
 		w.Header().Set("X-Lookup-Cache", "MISS")
+		done = timing.measure("delivery_lookup")
 		resolved, err := resolvePosterDelivery(ctx, slug)
+		done()
 		if err != nil {
 			log.Printf("[Poster] Cannot resolve delivery for %s: %v", slug, err)
 			sendNotFound(w, r, http.StatusNotFound)
 			return
 		}
 		delivery = resolved
+		done = timing.measure("cache_write")
 		cache.SetJSON(cacheKey, &delivery)
+		done()
 	}
 	thumbURL, err := delivery.imageURL(timePart, isDefaultPoster)
 	if err != nil {
@@ -92,7 +102,10 @@ func (h *Handler) HandlePoster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(upstreamReq)
+	done = timing.measure("upstream_headers")
+	resp, err := client.Do(timing.traceRequest(upstreamReq))
+	timing.traceResponse(resp)
+	done()
 	if err != nil {
 		log.Printf("[Poster] Upstream request failed: %s → %v", thumbURL, err)
 		sendNotFound(w, r, http.StatusNotFound)
@@ -115,7 +128,12 @@ func (h *Handler) HandlePoster(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	buf := make([]byte, 32*1024)
-	io.CopyBuffer(w, resp.Body, buf)
+	done = timing.measure("stream_body")
+	_, err = io.CopyBuffer(w, resp.Body, buf)
+	done()
+	if err != nil {
+		timing.copyError = err.Error()
+	}
 }
 
 type posterDelivery struct {

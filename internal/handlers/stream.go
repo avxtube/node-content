@@ -61,6 +61,9 @@ func thumbnailParams(requested publicFileRequest, lookup publicAssetLookup) *Ima
 // File flow: file.slug → file._id → media by fileId → storage → object.
 // Direct image flow: media.slug → image media → storage → object.
 func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
+	timing := newAssetTiming(w)
+	w = timing
+	defer timing.finish(r)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -82,7 +85,10 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 	var mediaMime string
 	lookupKey := fmt.Sprintf("public_asset_proxy_destination_v3:%s:%s:%s:%t", requested.Slug, requested.Asset, requested.Extension, requested.Nested)
 	var lookup publicAssetLookup
-	if cache.GetJSON(lookupKey, &lookup) && lookup.SourceURL != "" {
+	done := timing.measure("lookup_cache")
+	hit := cache.GetJSON(lookupKey, &lookup) && lookup.SourceURL != ""
+	done()
+	if hit {
 		sourceURL = lookup.SourceURL
 		mediaMime = lookup.Mime
 		w.Header().Set("X-Lookup-Cache", "HIT")
@@ -91,7 +97,9 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 
 		// ─── Step 1: Find file by slug ───────────────────────────────────
 		fileFilter := publicFileFilter(requested)
+		done = timing.measure("file_db")
 		err := models.FileModel.Col().FindOne(ctx, fileFilter).Decode(&file)
+		done()
 		if err == nil {
 			if file.IsTrashed() || file.IsDeleted() {
 				sendNotFound(w, r, http.StatusGone)
@@ -116,11 +124,13 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 				mediaFilter["key"] = bson.M{"$regex": "(?i)\\." + regexp.QuoteMeta(requested.Extension) + "$"}
 			}
 
+			done = timing.measure("media_db")
 			err = models.MediaModel.Col().FindOne(
 				ctx,
 				mediaFilter,
 				options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}, {Key: "_id", Value: -1}}),
 			).Decode(&media)
+			done()
 			if err != nil {
 				log.Printf("[Stream] Media not found for fileId=%s: %v", file.ID, err)
 				sendNotFound(w, r, http.StatusNotFound)
@@ -128,17 +138,21 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 			}
 		} else if !requested.Nested {
 			// ─── Step 2b: Custom images are addressed by media.slug ─────
+			done = timing.measure("media_db")
 			err = models.MediaModel.Col().FindOne(ctx, bson.M{
 				"slug": fileSlug,
 				"type": enums.MediaTypeImage,
 			}).Decode(&media)
+			done()
 			if err != nil {
 				log.Printf("[Stream] File or image media not found for slug=%s: %v", fileSlug, err)
 				sendNotFound(w, r, http.StatusNotFound)
 				return
 			}
 			log.Printf("[Stream] Resolved direct image media slug=%s mediaId=%s", fileSlug, media.ID)
+			done = timing.measure("file_db")
 			err = models.FileModel.Col().FindOne(ctx, bson.M{"_id": media.FileID, "status": "ready"}).Decode(&file)
+			done()
 			if err != nil || file.IsTrashed() || file.IsDeleted() {
 				sendNotFound(w, r, http.StatusNotFound)
 				return
@@ -188,19 +202,27 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 			}
 			// Only automatic poster thumbnails need the owner's kind. The _id
 			// index and projection keep this cache-miss lookup small.
+			done = timing.measure("content_db")
 			err := models.FileModel.Col().Database().Collection("contents").FindOne(ctx,
 				bson.M{"_id": ownerID}, options.FindOne().SetProjection(bson.M{"kind": 1, "_id": 0}),
 			).Decode(&content)
+			done()
 			if err == nil {
 				lookup.ContentKind = content.Kind
 			}
 		}
+		done = timing.measure("cache_write")
 		cache.SetJSON(lookupKey, &lookup)
+		done()
 	}
 
 	// ─── Step 4: Build source URL & proxy stream ─────────────────────────
 	if sourceURL == "" {
 		sendNotFound(w, r, http.StatusNotFound)
+		return
+	}
+	if requested.isThumbnail() {
+		h.serveCachedThumbnail(w, r, sourceURL, thumbnailParams(requested, lookup), timing)
 		return
 	}
 	log.Printf("[Stream] Proxying: slug=%s → %s", fileSlug, sourceURL)
@@ -221,7 +243,10 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &http.Client{Timeout: 0} // no timeout — streaming
-	resp, err := client.Do(upstreamReq)
+	done = timing.measure("upstream_headers")
+	resp, err := client.Do(timing.traceRequest(upstreamReq))
+	timing.traceResponse(resp)
+	done()
 	if err != nil {
 		log.Printf("[Stream] Upstream request failed: %v", err)
 		sendNotFound(w, r, http.StatusBadGateway)
@@ -245,14 +270,18 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if imgParams != nil && isImageContentType(contentType) {
+		done = timing.measure("upstream_body")
 		imgData, err := io.ReadAll(resp.Body)
+		done()
 		if err != nil {
 			log.Printf("[Stream] Failed to read image body: %v", err)
 			sendNotFound(w, r, http.StatusInternalServerError)
 			return
 		}
 
+		done = timing.measure("image_transform")
 		resized, outType, err := resizeImage(imgData, contentType, imgParams)
+		done()
 		if err != nil {
 			log.Printf("[Stream] Failed to resize image: %v", err)
 			// Fallback: serve original
@@ -308,7 +337,12 @@ func (h *Handler) StreamFile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	buf := make([]byte, 32*1024)
-	io.CopyBuffer(w, resp.Body, buf)
+	done = timing.measure("stream_body")
+	_, err = io.CopyBuffer(w, resp.Body, buf)
+	done()
+	if err != nil {
+		timing.copyError = err.Error()
+	}
 }
 
 func publicFileFilter(requested publicFileRequest) bson.M {

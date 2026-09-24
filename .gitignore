@@ -8,6 +8,8 @@
 # Build output
 /.build/
 /.cached/
+.cached/
+.thumbnail-cache/
 
 # Temp / download
 /conf/
